@@ -18,7 +18,6 @@ RUN cargo chef cook --profile docker --recipe-path recipe.json
 # ---- Stage 3: Build the application ----
 COPY Cargo.toml Cargo.lock ./
 COPY src/ ./src/
-COPY migrations/ ./migrations/
 RUN cargo build --profile docker -p matrix-bridge-slack
 
 # ---- Stage 4: Runtime ----
