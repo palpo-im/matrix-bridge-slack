@@ -810,29 +810,6 @@ mod tests {
     }
 
     #[test]
-    fn converts_bold_to_html() {
-        let converter = make_converter();
-        let result = converter.format_as_html("*bold text*");
-        assert!(result.contains("<strong>bold text</strong>"));
-    }
-
-    #[test]
-    fn converts_italic_to_html() {
-        let converter = create_test_converter();
-        let input = "_italic text_";
-        let result = converter.format_for_matrix(&input);
-        assert_eq!(result, "_italic text_");
-    }
-
-    #[test]
-    fn converts_custom_emoji_to_text() {
-        let converter = create_test_converter();
-        let input = ":smile:";
-        let result = converter.format_for_matrix(&input);
-        assert_eq!(result, ":smile:");
-    }
-
-    #[test]
     fn converts_strikethrough_to_html() {
         let converter = make_converter();
         let result = converter.format_as_html("~strikethrough~");
@@ -868,87 +845,6 @@ mod tests {
         assert!(!converter.has_code_block("No code here"));
     }
 
-    fn create_matrix_content(&self, msg: &BridgeMessage) {
-        let converter = make_converter();
-        let msg = BridgeMessage {
-            source_platform: "slack".to_string(),
-            target_platform: "matrix".to_string(),
-            source_id: "test".to_string(),
-            target_id: "room".to_string(),
-            content: "plain text".to_string(),
-            formatted_content: Some("<b>formatted</b>".to_string()),
-            timestamp: "now".to_string(),
-            attachments: vec![],
-        };
-        let content = converter.to_matrix_content(&msg);
-        assert_eq!(content["format"], "org.matrix.custom.html");
-        assert_eq!(content["formatted_body"], "<b>formatted</b>");
-    }
-
-    #[test]
-    fn creates_edit_content() {
-        let converter = make_converter();
-        let content = converter.create_edit_content("new message", "$event123", None);
-        assert_eq!(content["m.relates_to"]["rel_type"], "m.replace");
-        assert_eq!(content["m.relates_to"]["event_id"], "$event123");
-        assert_eq!(content["m.new_content"]["body"], "new message");
-    }
-
-    #[test]
-    fn converts_user_mention_to_matrix() {
-        let converter = make_converter();
-        let result = converter.format_for_matrix("Hello <@U123456789>!");
-        assert!(result.contains("@_slack_U123456789:example.org");
-    }
-
-    #[test]
-    fn converts_user_mention_with_nickname_to_matrix() {
-        let converter = make_converter();
-        let result = converter.format_for_matrix("Hello <@U123456789|john>!");
-        assert!(result.contains("@_slack_U123456789:example.org");
-    }
-
-    #[test]
-    fn converts_channel_mention_to_matrix() {
-        let converter = make_converter();
-        let result = converter.format_for_matrix("Check out <#C987654321>!");
-        assert!(result.contains("#_slack_C987654321:example.org");
-    }
-}
-
-    #[test]
-    fn converts_lists_to_html() {
-        let converter = make_converter();
-        let result = converter.format_as_html("• Item 1\n• Item 2");
-        assert!(result.contains("<ul>"));
-        assert!(result.contains("<li>Item 1</li>"));
-        assert!(result.contains("<li>Item 2</li>"));
-        assert!(result.contains("</ul>"));
-    }
-}
-
-    #[test]
-    fn converts_strikethrough_to_html() {
-        let converter = make_converter();
-        let result = converter.format_as_html("~~strikethrough~~");
-        assert!(result.contains("<del>strikethrough</del>"));
-    }
-
-    #[test]
-    fn converts_code_block_to_html() {
-        let converter = make_converter();
-        let result = converter.format_as_html("```rust\nlet x = 1;\n```");
-        assert!(result.contains("<pre>"));
-        assert!(result.contains("language-rust"));
-    }
-
-    #[test]
-    fn converts_inline_code_to_html() {
-        let converter = make_converter();
-        let result = converter.format_as_html("`inline code`");
-        assert!(result.contains("<code>inline code</code>"));
-    }
-
     #[test]
     fn creates_matrix_content_with_formatting() {
         let converter = make_converter();
@@ -975,19 +871,4 @@ mod tests {
         assert_eq!(content["m.relates_to"]["event_id"], "$event123");
         assert_eq!(content["m.new_content"]["body"], "new message");
     }
-
-    #[test]
-    fn detects_spoiler() {
-        let converter = make_converter();
-        assert!(converter.is_spoiler("This is ||spoiler|| text"));
-        assert!(!converter.is_spoiler("Normal text"));
-    }
-
-    #[test]
-    fn detects_code_block() {
-        let converter = make_converter();
-        assert!(converter.has_code_block("Here is code:\n```rust\ncode\n```"));
-        assert!(!converter.has_code_block("No code here"));
-    }
 }
-
