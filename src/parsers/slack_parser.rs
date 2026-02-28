@@ -32,6 +32,7 @@ pub struct SlackToMatrixConverter {
     role_regex: Regex,
     emoji_regex: Regex,
     animated_emoji_regex: Regex,
+    custom_emoji_regex: Regex,
     everyone_regex: Regex,
     here_regex: Regex,
     code_block_regex: Regex,
@@ -53,11 +54,14 @@ impl SlackToMatrixConverter {
             slack_client,
             emoji_handler: None,
             domain: String::new(),
-            mention_regex: Regex::new(r"<@([A-Z0-9]+)(?:\|[^>]+)?>").unwrap(),
-            channel_regex: Regex::new(r"<#([A-Z0-9]+)(?:\|[^>]+)?>").unwrap(),
-            role_regex: Regex::new(r"<@&(\d+)>").unwrap(),
+            mention_regex: Regex::new(r"(?:<|&lt;)@([A-Z0-9]+)(?:\|[^>&]+)?(?:>|&gt;)").unwrap(),
+            channel_regex: Regex::new(r"(?:<|&lt;)#([A-Z0-9]+)(?:\|[^>&]+)?(?:>|&gt;)").unwrap(),
+            role_regex: Regex::new(r"(?:<|&lt;)@&(\d+)(?:>|&gt;)").unwrap(),
             emoji_regex: Regex::new(r":([a-zA-Z0-9_+-]+):").unwrap(),
-            animated_emoji_regex: Regex::new(r"<a:([a-zA-Z0-9_]+):(\d+)>").unwrap(),
+            animated_emoji_regex: Regex::new(r"(?:<|&lt;)a:([a-zA-Z0-9_]+):(\d+)(?:>|&gt;)")
+                .unwrap(),
+            custom_emoji_regex: Regex::new(r"(?:<|&lt;):([a-zA-Z0-9_+-]+):(\d+)(?:>|&gt;)")
+                .unwrap(),
             everyone_regex: Regex::new(r"<!everyone>").unwrap(),
             here_regex: Regex::new(r"<!here>|<!channel>").unwrap(),
             code_block_regex: Regex::new(r"```(?:([a-z]*)\n)?([\s\S]*?)```").unwrap(),
@@ -68,7 +72,8 @@ impl SlackToMatrixConverter {
             strikethrough_regex: Regex::new(r"~([^~]+)~").unwrap(),
             spoiler_regex: Regex::new(r"\|\|([^|]+)\|\|").unwrap(),
             quote_regex: Regex::new(r"^> (.+)$").unwrap(),
-            link_regex: Regex::new(r"<(https?://[^>|]+)(?:\|([^>]+))?>").unwrap(),
+            link_regex: Regex::new(r"(?:<|&lt;)(https?://.*?)(?:\|([^>&]+))?(?:>|&gt;)")
+                .unwrap(),
             unordered_list_regex: Regex::new(r"^• (.+)$").unwrap(),
             ordered_list_regex: Regex::new(r"^(\d+)\. (.+)$").unwrap(),
         }
@@ -305,6 +310,14 @@ impl SlackToMatrixConverter {
             .to_string();
 
         result = self
+            .custom_emoji_regex
+            .replace_all(&result, |caps: &regex::Captures| {
+                let emoji_name = &caps[1];
+                format!(":{}:", emoji_name)
+            })
+            .to_string();
+
+        result = self
             .emoji_regex
             .replace_all(&result, |caps: &regex::Captures| {
                 let emoji_name = &caps[1];
@@ -327,7 +340,7 @@ impl SlackToMatrixConverter {
             })
             .to_string();
 
-        result = self.emoji_regex
+        result = self.custom_emoji_regex
             .replace_all(&result, |caps: &regex::Captures| {
                 let emoji_name = &caps[1];
                 let emoji_id = &caps[2];
@@ -354,14 +367,14 @@ impl SlackToMatrixConverter {
             .to_string();
 
         result = self
-            .emoji_regex
+            .custom_emoji_regex
             .replace_all(&result, |caps: &regex::Captures| {
                 format!("__STATIC_EMOJI_{}__", &caps[2])
             })
             .to_string();
 
         let mut emoji_info: Vec<(String, String, bool)> = Vec::new();
-        for caps in self.emoji_regex.captures_iter(text) {
+        for caps in self.custom_emoji_regex.captures_iter(text) {
             emoji_info.push((caps[1].to_string(), caps[2].to_string(), false));
         }
         for caps in self.animated_emoji_regex.captures_iter(text) {
@@ -370,7 +383,7 @@ impl SlackToMatrixConverter {
 
         for (emoji_name, emoji_id, animated) in emoji_info {
             let placeholder = if animated {
-                format!("__ANIMATED_EMOBIJI_{}__", emoji_id)
+                format!("__ANIMATED_EMOJI_{}__", emoji_id)
             } else {
                 format!("__STATIC_EMOJI_{}__", emoji_id)
             };
@@ -782,7 +795,7 @@ mod tests {
     fn converts_animated_emoji_to_text() {
         let converter = make_converter();
         let result = converter.format_for_matrix("Wow! <a:dance:67890>");
-        assert_eq!(result, "Wow! <a:dance:67890>");
+        assert_eq!(result, "Wow! :dance:");
     }
 
     #[test]
