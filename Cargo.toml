@@ -1,6 +1,6 @@
 [package]
 name = "matrix-bridge-slack"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Palpo Team <chris@acroidea.com>"]
 description = "A bridge between Matrix and Slack written in Rust"
