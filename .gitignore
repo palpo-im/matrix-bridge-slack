@@ -1,0 +1,38 @@
+.idea/
+.vscode/
+*.code-workspace
+.history/
+
+# Logs
+logs/
+*.log
+*.log.*
+*.audit.json
+*-audit.json
+*.txt
+
+# Runtime data
+pids/
+*.pid
+*.seed
+
+# Local config/secrets
+config.yaml
+slack-registration.yaml
+
+# Databases
+*.db
+*.db.backup
+
+# Rust
+target/
+**/*.rs.bk
+
+# Python helper tooling
+.venv/
+__pycache__/
+.pytest_cache/
+.claude/
+nul
+_diff.md
+_todos.md

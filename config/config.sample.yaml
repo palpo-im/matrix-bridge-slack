@@ -1,0 +1,86 @@
+# Matrix Slack Bridge sample configuration.
+# Use snake_case keys in this file.
+
+bridge:
+  domain: "localhost"
+  homeserver_url: "http://localhost:8008"
+  port: 9005
+  bind_address: "0.0.0.0"
+  bridge_id: "slack"
+  appservice_token: "CHANGE_ME_AS_TOKEN"
+  homeserver_token: "CHANGE_ME_HS_TOKEN"
+  presence_interval: 500
+  disable_presence: false
+  disable_typing_notifications: false
+  disable_deletion_forwarding: false
+  disable_portal_bridging: false
+  enable_self_service_bridging: false
+  disable_read_receipts: false
+  disable_join_leave_notifications: false
+  disable_invite_notifications: false
+  disable_room_topic_notifications: false
+  determine_code_language: false
+  admin_mxid: "@admin:localhost"
+  invalid_token_message: "Your Slack bot token seems to be invalid, and the bridge cannot function. Please update it in your bridge settings and restart the bridge"
+  user_limit: null
+  user_activity:
+    min_user_active_days: 0
+    inactive_after_days: 0
+
+auth:
+  client_id: "12345"
+  bot_token: "CHANGE_ME_SLACK_BOT_TOKEN"
+  app_token: "CHANGE_ME_SLACK_APP_TOKEN"
+  client_secret: null
+  use_privileged_intents: false # unused for Slack, kept for compatibility
+
+logging:
+  level: "info"
+  line_date_format: "MMM-D HH:mm:ss.SSS"
+  format: "pretty"
+  files: []
+
+database:
+  # Choose one:
+  # filename: "slack.db"
+  # url: "postgresql://user:password@localhost/matrix_slack"
+  # url: "mysql://user:password@localhost:3306/matrix_slack"
+  url: "sqlite://./slack.db"
+  max_connections: 10
+  min_connections: 1
+
+room:
+  default_visibility: "public"
+  room_alias_prefix: "_slack_"
+  enable_room_creation: true
+  kick_for: 30000
+
+channel:
+  name_pattern: "[Slack] :guild :name"
+  enable_channel_creation: true
+  channel_name_format: "{guild_name} - {channel_name}"
+  topic_format: "Bridged from Matrix room {room_id}"
+  delete_options:
+    disable_messaging: false
+    unset_room_alias: true
+    unlist_from_directory: true
+    set_invite_only: true
+    ghosts_leave: true
+
+limits:
+  room_ghost_join_delay: 6000
+  slack_send_delay: 1500
+  room_count: -1
+  matrix_event_age_limit_ms: 900000
+
+ghosts:
+  nick_pattern: ":nick"
+  username_pattern: ":username#:tag"
+  username_template: "_slack_{user_id}"
+  displayname_template: "{username}#{discriminator}"
+  avatar_url_template: null
+
+metrics:
+  enabled: false
+  port: 9001
+  bind_address: "127.0.0.1"

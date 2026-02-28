@@ -1,0 +1,76 @@
+[package]
+name = "matrix-bridge-slack"
+version = "0.1.0"
+edition = "2024"
+authors = ["Palpo Team <chris@acroidea.com>"]
+description = "A bridge between Matrix and Slack written in Rust"
+license = "Apache-2.0"
+repository = "https://github.com/palpo-im/matrix-bridge-slack"
+keywords = ["matrix", "slack", "bridge", "chat"]
+categories = ["network-programming", "web-programming"]
+
+[[bin]]
+name = "matrix-bridge-slack"
+path = "src/main.rs"
+
+[features]
+default = ["postgres", "sqlite"]
+postgres = ["diesel/postgres"]
+sqlite = ["diesel/sqlite", "dep:libsqlite3-sys"]
+mysql = ["diesel/mysql"]
+
+[dependencies]
+salvo = { version = "0.89", features = ["oapi", "quinn"] }
+tokio = { version = "1.40", features = ["full"] }
+hyper = { version = "1.8.1", features = ["full"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+diesel = { version = "2.3.6", default-features = false, features = [
+    "r2d2",
+    "chrono",
+] }
+libsqlite3-sys = { version = "0.35.0", features = ["bundled"], optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+config = "0.15.19"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-futures = "0.2"
+anyhow = "1.0"
+thiserror = "2.0.18"
+futures = "0.3"
+async-trait = "0.1"
+reqwest = { version = "0.13", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
+time = "0.3"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+url = "2.5"
+once_cell = "1.20"
+parking_lot = "0.12"
+metrics = { version = "0.24.3", optional = true }
+metrics-exporter-prometheus = { version = "0.18.1", optional = true }
+matrix-bot-sdk = { version = "0.2.4", features = ["appservice"] }
+secrecy = "0.10.3"
+regex = "1.10"
+clap = { version = "4.5", features = ["derive", "env"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "=3.25.0"
+test-case = "3.3"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Faster builds for Docker CI — thin LTO instead of fat LTO
+[profile.docker]
+inherits = "release"
+lto = "thin"
+codegen-units = 4
+
+[profile.dev]
+debug = true
+opt-level = 0
