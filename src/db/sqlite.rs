@@ -794,5 +794,102 @@ impl super::EmojiStore for SqliteEmojiStore {
         .await
         .map_err(|e| DatabaseError::Query(format!("database task failed: {e}")))?
     }
+
+    async fn get_emoji_by_name(
+        &self,
+        emoji_name: &str,
+    ) -> Result<Option<EmojiMapping>, DatabaseError> {
+        let emoji_name = emoji_name.to_string();
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut conn = establish_connection(&db_path)?;
+            diesel::sql_query(
+                "SELECT id, slack_emoji_id, emoji_name, animated, mxc_url, created_at, updated_at FROM emoji_mappings WHERE emoji_name = ?"
+            )
+            .bind::<diesel::sql_types::Text, _>(&emoji_name)
+            .get_result::<DbEmojiMapping>(&mut conn)
+            .optional()
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+            .map(|m| m.to_emoji_mapping())
+            .transpose()
+        })
+        .await
+        .map_err(|e| DatabaseError::Query(format!("database task failed: {e}")))?
+    }
+
+    async fn upsert_emoji_mapping(
+        &self,
+        name: &str,
+        mxc_url: &str,
+    ) -> Result<(), DatabaseError> {
+        let name = name.to_string();
+        let mxc_url = mxc_url.to_string();
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut conn = establish_connection(&db_path)?;
+            let now = datetime_to_string(&chrono::Utc::now());
+
+            // Check if an emoji with this name already exists
+            let existing = diesel::sql_query(
+                "SELECT id, slack_emoji_id, emoji_name, animated, mxc_url, created_at, updated_at FROM emoji_mappings WHERE emoji_name = ?"
+            )
+            .bind::<diesel::sql_types::Text, _>(&name)
+            .get_result::<DbEmojiMapping>(&mut conn)
+            .optional()
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+            if existing.is_some() {
+                diesel::sql_query(
+                    "UPDATE emoji_mappings SET mxc_url = ?, updated_at = ? WHERE emoji_name = ?"
+                )
+                .bind::<diesel::sql_types::Text, _>(&mxc_url)
+                .bind::<diesel::sql_types::Text, _>(&now)
+                .bind::<diesel::sql_types::Text, _>(&name)
+                .execute(&mut conn)
+                .map(|_| ())
+                .map_err(|e| DatabaseError::Query(e.to_string()))
+            } else {
+                diesel::sql_query(
+                    "INSERT INTO emoji_mappings (slack_emoji_id, emoji_name, animated, mxc_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+                )
+                .bind::<diesel::sql_types::Text, _>(&name)
+                .bind::<diesel::sql_types::Text, _>(&name)
+                .bind::<diesel::sql_types::Bool, _>(false)
+                .bind::<diesel::sql_types::Text, _>(&mxc_url)
+                .bind::<diesel::sql_types::Text, _>(&now)
+                .bind::<diesel::sql_types::Text, _>(&now)
+                .execute(&mut conn)
+                .map(|_| ())
+                .map_err(|e| DatabaseError::Query(e.to_string()))
+            }
+        })
+        .await
+        .map_err(|e| DatabaseError::Query(format!("database task failed: {e}")))?
+    }
+
+    async fn rename_emoji(
+        &self,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<(), DatabaseError> {
+        let old_name = old_name.to_string();
+        let new_name = new_name.to_string();
+        let db_path = self.db_path.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut conn = establish_connection(&db_path)?;
+            let now = datetime_to_string(&chrono::Utc::now());
+            diesel::sql_query(
+                "UPDATE emoji_mappings SET emoji_name = ?, updated_at = ? WHERE emoji_name = ?"
+            )
+            .bind::<diesel::sql_types::Text, _>(&new_name)
+            .bind::<diesel::sql_types::Text, _>(&now)
+            .bind::<diesel::sql_types::Text, _>(&old_name)
+            .execute(&mut conn)
+            .map(|_| ())
+            .map_err(|e| DatabaseError::Query(e.to_string()))
+        })
+        .await
+        .map_err(|e| DatabaseError::Query(format!("database task failed: {e}")))?
+    }
 }
 

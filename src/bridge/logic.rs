@@ -112,6 +112,7 @@ mod tests {
     fn apply_message_relation_mappings_replaces_ids_when_links_exist() {
         let mut outbound = OutboundMatrixMessage {
             body: "hello".to_string(),
+            formatted_body: None,
             reply_to: Some("slack-reply-id".to_string()),
             edit_of: Some("slack-edit-id".to_string()),
             attachments: Vec::new(),
@@ -130,6 +131,7 @@ mod tests {
     fn apply_message_relation_mappings_keeps_original_when_links_missing() {
         let mut outbound = OutboundMatrixMessage {
             body: "hello".to_string(),
+            formatted_body: None,
             reply_to: Some("slack-reply-id".to_string()),
             edit_of: Some("slack-edit-id".to_string()),
             attachments: Vec::new(),

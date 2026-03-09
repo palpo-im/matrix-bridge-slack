@@ -18,6 +18,11 @@ pub trait MatrixEventHandler: Send + Sync {
     async fn handle_room_name(&self, event: &MatrixEvent) -> Result<()>;
     async fn handle_room_topic(&self, event: &MatrixEvent) -> Result<()>;
     async fn handle_room_power_levels(&self, event: &MatrixEvent) -> Result<()>;
+    async fn handle_room_redaction(&self, event: &MatrixEvent) -> Result<()>;
+    async fn handle_reaction(&self, event: &MatrixEvent) -> Result<()>;
+    async fn handle_typing(&self, event: &MatrixEvent) -> Result<()>;
+    async fn handle_receipt(&self, event: &MatrixEvent) -> Result<()>;
+    async fn handle_sticker(&self, event: &MatrixEvent) -> Result<()>;
 }
 
 pub struct MatrixEventHandlerImpl {
@@ -97,6 +102,51 @@ impl MatrixEventHandler for MatrixEventHandlerImpl {
         }
         Ok(())
     }
+
+    async fn handle_room_redaction(&self, event: &MatrixEvent) -> Result<()> {
+        if let Some(bridge) = &self.bridge {
+            bridge.handle_matrix_redaction(event).await?;
+        } else {
+            debug!("matrix redaction received without bridge binding");
+        }
+        Ok(())
+    }
+
+    async fn handle_reaction(&self, event: &MatrixEvent) -> Result<()> {
+        if let Some(bridge) = &self.bridge {
+            bridge.handle_matrix_reaction(event).await?;
+        } else {
+            debug!("matrix reaction received without bridge binding");
+        }
+        Ok(())
+    }
+
+    async fn handle_typing(&self, event: &MatrixEvent) -> Result<()> {
+        if let Some(bridge) = &self.bridge {
+            bridge.handle_matrix_typing(event).await?;
+        } else {
+            debug!("matrix typing received without bridge binding");
+        }
+        Ok(())
+    }
+
+    async fn handle_receipt(&self, event: &MatrixEvent) -> Result<()> {
+        if let Some(bridge) = &self.bridge {
+            bridge.handle_matrix_receipt(event).await?;
+        } else {
+            debug!("matrix receipt received without bridge binding");
+        }
+        Ok(())
+    }
+
+    async fn handle_sticker(&self, event: &MatrixEvent) -> Result<()> {
+        if let Some(bridge) = &self.bridge {
+            bridge.handle_matrix_sticker(event).await?;
+        } else {
+            debug!("matrix sticker received without bridge binding");
+        }
+        Ok(())
+    }
 }
 
 pub struct MatrixEventProcessor {
@@ -161,6 +211,11 @@ impl MatrixEventProcessor {
             "m.room.name" => self.event_handler.handle_room_name(&event).await?,
             "m.room.topic" => self.event_handler.handle_room_topic(&event).await?,
             "m.room.power_levels" => self.event_handler.handle_room_power_levels(&event).await?,
+            "m.room.redaction" => self.event_handler.handle_room_redaction(&event).await?,
+            "m.reaction" => self.event_handler.handle_reaction(&event).await?,
+            "m.typing" => self.event_handler.handle_typing(&event).await?,
+            "m.receipt" => self.event_handler.handle_receipt(&event).await?,
+            "m.sticker" => self.event_handler.handle_sticker(&event).await?,
             other => debug!("unhandled matrix event type: {}", other),
         }
         Ok(())

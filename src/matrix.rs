@@ -95,11 +95,18 @@ fn build_matrix_message_content(
     body: &str,
     reply_to: Option<&str>,
     edit_of: Option<&str>,
+    formatted_body: Option<&str>,
 ) -> Value {
     let mut content = json!({
         "msgtype": "m.text",
         "body": body,
     });
+
+    // Add formatted body (HTML) when available
+    if let Some(formatted) = formatted_body {
+        content["format"] = "org.matrix.custom.html".into();
+        content["formatted_body"] = formatted.into();
+    }
 
     if let Some(reply_id) = reply_to {
         content["m.relates_to"] = json!({
@@ -110,15 +117,23 @@ fn build_matrix_message_content(
     }
 
     if let Some(edit_event_id) = edit_of {
-        content["m.new_content"] = json!({
+        let mut new_content = json!({
             "msgtype": "m.text",
             "body": body,
         });
+        if let Some(formatted) = formatted_body {
+            new_content["format"] = "org.matrix.custom.html".into();
+            new_content["formatted_body"] = formatted.into();
+        }
+        content["m.new_content"] = new_content;
         content["m.relates_to"] = json!({
             "rel_type": "m.replace",
             "event_id": edit_event_id,
         });
         content["body"] = format!("* {body}").into();
+        if let Some(formatted) = formatted_body {
+            content["formatted_body"] = format!("* {formatted}").into();
+        }
     }
 
     content
@@ -296,7 +311,7 @@ impl MatrixAppservice {
     }
 
     pub async fn send_message(&self, room_id: &str, sender: &str, content: &str) -> Result<()> {
-        self.send_message_with_metadata(room_id, sender, content, &[], None, None)
+        self.send_message_with_metadata(room_id, sender, content, &[], None, None, None)
             .await
             .map(|_| ())
     }
@@ -336,13 +351,14 @@ impl MatrixAppservice {
         _attachments: &[String],
         reply_to: Option<&str>,
         edit_of: Option<&str>,
+        formatted_body: Option<&str>,
     ) -> Result<String> {
         let ghost_client = self.appservice.client.clone();
         ghost_client
             .impersonate_user_id(Some(sender), None::<&str>)
             .await;
 
-        let content = build_matrix_message_content(body, reply_to, edit_of);
+        let content = build_matrix_message_content(body, reply_to, edit_of, formatted_body);
 
         let event_id = ghost_client
             .send_event(room_id, "m.room.message", &content)
@@ -1067,7 +1083,7 @@ mod tests {
 
     #[test]
     fn message_content_adds_reply_relation() {
-        let content = build_matrix_message_content("hello", Some("$event123"), None);
+        let content = build_matrix_message_content("hello", Some("$event123"), None, None);
         assert_eq!(content["msgtype"], "m.text");
         assert_eq!(content["body"], "hello");
         assert_eq!(
@@ -1079,7 +1095,7 @@ mod tests {
 
     #[test]
     fn message_content_adds_edit_relation() {
-        let content = build_matrix_message_content("new body", None, Some("$old_event"));
+        let content = build_matrix_message_content("new body", None, Some("$old_event"), None);
         assert_eq!(content["msgtype"], "m.text");
         assert_eq!(content["body"], "* new body");
         assert_eq!(content["m.new_content"]["body"], "new body");
@@ -1104,7 +1120,7 @@ mod tests {
     #[test]
     fn message_content_prefers_edit_relation_over_reply_relation() {
         let content =
-            build_matrix_message_content("edited", Some("$reply_target"), Some("$edit_target"));
+            build_matrix_message_content("edited", Some("$reply_target"), Some("$edit_target"), None);
 
         assert_eq!(content["body"], "* edited");
         assert_eq!(content["m.relates_to"]["rel_type"], "m.replace");

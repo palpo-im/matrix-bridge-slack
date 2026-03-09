@@ -121,6 +121,103 @@ impl EmojiHandler {
         Ok(())
     }
 
+    /// Handle an emoji change event from Slack
+    pub async fn handle_emoji_change(&self, subtype: &str, name: &str, value: Option<&str>) -> Result<()> {
+        match subtype {
+            "add" => {
+                if let Some(url) = value {
+                    if url.starts_with("alias:") {
+                        // This is an alias, store the alias reference
+                        debug!("emoji alias added: {} -> {}", name, url);
+                    } else {
+                        // New custom emoji, download and upload to Matrix
+                        info!("new custom emoji: {} = {}", name, url);
+                        self.download_and_cache_emoji(name, url).await?;
+                    }
+                }
+            }
+            "remove" => {
+                info!("emoji removed: {}", name);
+                self.delete_emoji_by_name(name).await?;
+            }
+            "rename" => {
+                if let Some(new_name) = value {
+                    info!("emoji renamed: {} -> {}", name, new_name);
+                    self.rename_emoji(name, new_name).await?;
+                }
+            }
+            _ => {
+                debug!("unknown emoji change subtype: {}", subtype);
+            }
+        }
+        Ok(())
+    }
+
+    /// Download emoji from URL and cache it
+    async fn download_and_cache_emoji(&self, name: &str, url: &str) -> Result<()> {
+        // Download the emoji
+        let media_info = self.media_handler.download_from_url(url).await?;
+
+        // Upload to Matrix
+        let mxc_url = self.upload_emoji_to_matrix(&media_info).await?;
+
+        // Cache the mapping
+        self.db
+            .emoji_store()
+            .upsert_emoji_mapping(name, &mxc_url)
+            .await?;
+
+        info!("cached emoji {} -> {}", name, mxc_url);
+        Ok(())
+    }
+
+    /// Upload emoji data to Matrix and return mxc URL
+    async fn upload_emoji_to_matrix(&self, media: &crate::media::MediaInfo) -> Result<String> {
+        let client = reqwest::Client::new();
+        let response = client
+            .post(format!(
+                "{}/_matrix/media/v3/upload?filename={}",
+                self.homeserver_url.trim_end_matches('/'),
+                urlencoding::encode(&media.filename)
+            ))
+            .header("Content-Type", &media.content_type)
+            .body(media.data.clone())
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!("Failed to upload emoji: {}", body));
+        }
+
+        let value: serde_json::Value = response.json().await?;
+        value
+            .get("content_uri")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("upload response missing content_uri"))
+    }
+
+    /// Delete an emoji from the cache by name
+    async fn delete_emoji_by_name(&self, name: &str) -> Result<()> {
+        if let Some(existing) = self.db.emoji_store().get_emoji_by_name(name).await? {
+            self.db.emoji_store().delete_emoji(&existing.slack_emoji_id).await?;
+            info!("Deleted emoji cache for name={}", name);
+        } else {
+            debug!("emoji {} not found in cache, nothing to delete", name);
+        }
+        Ok(())
+    }
+
+    /// Rename a cached emoji
+    pub async fn rename_emoji(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.db
+            .emoji_store()
+            .rename_emoji(old_name, new_name)
+            .await?;
+        Ok(())
+    }
+
     pub fn emoji_to_matrix_html(&self, mxc_url: &str, emoji_name: &str) -> String {
         format!(
             r#"<img data-mx-emoticon src="{}" alt=":{}:" title=":{}:" height="32" width="32" />"#,

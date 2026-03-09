@@ -752,5 +752,74 @@ impl super::EmojiStore for PostgresEmojiStore {
         })
         .await
     }
+
+    async fn get_emoji_by_name(
+        &self,
+        emoji_name: &str,
+    ) -> Result<Option<EmojiMapping>, DatabaseError> {
+        let pool = self.pool.clone();
+        let emoji_name = emoji_name.to_string();
+        with_connection(pool, move |conn| {
+            diesel::sql_query(
+                "SELECT id, slack_emoji_id, emoji_name, animated, mxc_url, created_at, updated_at FROM emoji_mappings WHERE emoji_name = $1"
+            )
+            .bind::<diesel::sql_types::Text, _>(&emoji_name)
+            .get_result::<DbEmojiMapping>(conn)
+            .optional()
+            .map(|value| value.map(Into::into))
+            .map_err(|e| DatabaseError::Query(e.to_string()))
+        })
+        .await
+    }
+
+    async fn upsert_emoji_mapping(
+        &self,
+        name: &str,
+        mxc_url: &str,
+    ) -> Result<(), DatabaseError> {
+        let pool = self.pool.clone();
+        let name = name.to_string();
+        let mxc_url = mxc_url.to_string();
+        with_connection(pool, move |conn| {
+            let now = chrono::Utc::now();
+            diesel::sql_query(
+                "INSERT INTO emoji_mappings (slack_emoji_id, emoji_name, animated, mxc_url, created_at, updated_at) \
+                 VALUES ($1, $2, false, $3, $4, $5) \
+                 ON CONFLICT (slack_emoji_id) DO UPDATE SET emoji_name = $2, mxc_url = $3, updated_at = $5"
+            )
+            .bind::<diesel::sql_types::Text, _>(&name)
+            .bind::<diesel::sql_types::Text, _>(&name)
+            .bind::<diesel::sql_types::Text, _>(&mxc_url)
+            .bind::<diesel::sql_types::Timestamptz, _>(&now)
+            .bind::<diesel::sql_types::Timestamptz, _>(&now)
+            .execute(conn)
+            .map(|_| ())
+            .map_err(|e| DatabaseError::Query(e.to_string()))
+        })
+        .await
+    }
+
+    async fn rename_emoji(
+        &self,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<(), DatabaseError> {
+        let pool = self.pool.clone();
+        let old_name = old_name.to_string();
+        let new_name = new_name.to_string();
+        with_connection(pool, move |conn| {
+            let now = chrono::Utc::now();
+            diesel::sql_query(
+                "UPDATE emoji_mappings SET emoji_name = $1, updated_at = $2 WHERE emoji_name = $3"
+            )
+            .bind::<diesel::sql_types::Text, _>(&new_name)
+            .bind::<diesel::sql_types::Timestamptz, _>(&now)
+            .bind::<diesel::sql_types::Text, _>(&old_name)
+            .execute(conn)
+            .map(|_| ())
+            .map_err(|e| DatabaseError::Query(e.to_string()))
+        })
+        .await
+    }
 }
 

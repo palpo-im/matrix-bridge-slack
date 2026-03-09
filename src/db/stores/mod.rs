@@ -87,8 +87,22 @@ pub trait EmojiStore: Send + Sync {
         slack_emoji_id: &str,
     ) -> Result<Option<EmojiMapping>, DatabaseError>;
     async fn get_emoji_by_mxc(&self, mxc_url: &str) -> Result<Option<EmojiMapping>, DatabaseError>;
+    async fn get_emoji_by_name(
+        &self,
+        emoji_name: &str,
+    ) -> Result<Option<EmojiMapping>, DatabaseError>;
     async fn create_emoji(&self, emoji: &EmojiMapping) -> Result<(), DatabaseError>;
     async fn update_emoji(&self, emoji: &EmojiMapping) -> Result<(), DatabaseError>;
     async fn delete_emoji(&self, slack_emoji_id: &str) -> Result<(), DatabaseError>;
+    async fn upsert_emoji_mapping(
+        &self,
+        name: &str,
+        mxc_url: &str,
+    ) -> Result<(), DatabaseError>;
+    async fn rename_emoji(
+        &self,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<(), DatabaseError>;
 }
 

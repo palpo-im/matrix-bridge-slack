@@ -305,6 +305,17 @@ impl MessageUtils {
         let set: HashSet<T> = items.into_iter().collect();
         set.into_iter().collect()
     }
+
+    /// Basic normalization of Slack text for bridging to Matrix.
+    ///
+    /// Decodes Slack-specific escape sequences (`&amp;`, `&lt;`, `&gt;`) back
+    /// to their plain-text equivalents without performing any further
+    /// formatting conversion.
+    pub fn normalize_slack_text_basic(text: &str) -> String {
+        text.replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+    }
 }
 
 fn strip_html_tags(html: &str) -> String {

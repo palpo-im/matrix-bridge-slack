@@ -19,6 +19,25 @@ pub struct Config {
     pub ghosts: GhostsConfig,
     #[serde(default)]
     pub metrics: MetricsConfig,
+    #[serde(default)]
+    pub backfill: BackfillConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackfillConfig {
+    pub enabled: bool,
+    pub max_messages: u32,
+    pub conversation_count: u32,
+}
+
+impl Default for BackfillConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_messages: 100,
+            conversation_count: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -66,6 +85,16 @@ pub struct BridgeConfig {
     pub invalid_token_message: String,
     #[serde(default)]
     pub user_activity: Option<UserActivityConfig>,
+    #[serde(default)]
+    pub custom_emoji_reactions: bool,
+    #[serde(default)]
+    pub workspace_avatar_in_rooms: bool,
+    #[serde(default = "default_participant_sync_count")]
+    pub participant_sync_count: u32,
+    #[serde(default = "default_participant_sync_only_on_create")]
+    pub participant_sync_only_on_create: bool,
+    #[serde(default)]
+    pub mute_channels_by_default: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -605,6 +634,14 @@ fn default_invalid_token_message() -> String {
 
 fn default_use_privileged_intents() -> bool {
     false
+}
+
+fn default_participant_sync_count() -> u32 {
+    5
+}
+
+fn default_participant_sync_only_on_create() -> bool {
+    true
 }
 
 fn default_log_level() -> String {

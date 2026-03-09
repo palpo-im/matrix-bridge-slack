@@ -213,6 +213,11 @@ mod tests {
                 admin_mxid: None,
                 invalid_token_message: String::new(),
                 user_activity: None,
+                custom_emoji_reactions: false,
+                workspace_avatar_in_rooms: false,
+                participant_sync_count: 5,
+                participant_sync_only_on_create: true,
+                mute_channels_by_default: false,
             },
             registration: crate::config::RegistrationConfig::default(),
             auth: crate::config::AuthConfig {
@@ -263,6 +268,7 @@ mod tests {
                 avatar_url_template: None,
             },
             metrics: crate::config::MetricsConfig::default(),
+            backfill: Default::default(),
         });
 
         MatrixToSlackConverter::new(Arc::new(MatrixAppservice::new(config).await.unwrap()))

@@ -1,3 +1,4 @@
+pub mod blocks;
 pub mod command_parser;
 pub mod common;
 pub mod slack_parser;

@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Utc;
-use serde_json::json;
+use serde_json::{json, Value};
 use tracing::{debug, info, warn};
 
 use crate::cache::AsyncTimedCache;
@@ -17,6 +17,7 @@ use crate::emoji::EmojiHandler;
 use crate::matrix::{MatrixAppservice, MatrixCommandHandler, MatrixCommandOutcome, MatrixEvent};
 use crate::media::MediaHandler;
 
+pub mod backfill;
 pub mod blocker;
 pub mod logic;
 pub mod message_flow;
@@ -48,6 +49,10 @@ pub struct SlackMessageContext {
     pub reply_to: Option<String>,
     pub edit_of: Option<String>,
     pub permissions: HashSet<String>,
+    pub thread_ts: Option<String>,
+    pub blocks: Option<serde_json::Value>,
+    pub slack_attachments: Option<Vec<serde_json::Value>>,
+    pub files: Option<Vec<serde_json::Value>>,
 }
 
 const ROOM_CACHE_TTL_SECS: u64 = 900;
@@ -159,6 +164,7 @@ impl BridgeCore {
             &slack_sender,
             OutboundMatrixMessage {
                 body: content,
+                formatted_body: None,
                 reply_to: None,
                 edit_of: None,
                 attachments: Vec::new(),
@@ -770,12 +776,7 @@ impl BridgeCore {
     }
 
     pub async fn handle_matrix_room_name(&self, event: &MatrixEvent) -> Result<()> {
-        if self
-            .matrix_client
-            .config()
-            .bridge
-            .disable_room_topic_notifications
-        {
+        if self.matrix_client.is_namespaced_user(&event.sender) {
             return Ok(());
         }
 
@@ -790,38 +791,34 @@ impl BridgeCore {
             .and_then(|c| c.get("name").and_then(|n| n.as_str()))
             .unwrap_or("");
 
-        let sender_displayname = self
-            .matrix_client
-            .get_user_profile(&event.sender)
+        if new_name.is_empty() {
+            return Ok(());
+        }
+
+        match self
+            .slack_client
+            .rename_conversation(&mapping.slack_channel_id, new_name)
             .await
-            .ok()
-            .flatten()
-            .map(|(name, _)| name)
-            .unwrap_or_else(|| event.sender.clone());
+        {
+            Ok(()) => {
+                info!(
+                    "renamed slack channel {} to {} (from matrix room {})",
+                    mapping.slack_channel_id, new_name, event.room_id
+                );
+            }
+            Err(err) => {
+                warn!(
+                    "failed to rename slack channel {} to {}: {}",
+                    mapping.slack_channel_id, new_name, err
+                );
+            }
+        }
 
-        let message = format!(
-            "**{}** changed the room name to: {}",
-            sender_displayname, new_name
-        );
-
-        self.slack_client
-            .send_message(&mapping.slack_channel_id, &message)
-            .await?;
-
-        debug!(
-            "forwarded room name change to slack channel={}",
-            mapping.slack_channel_id
-        );
         Ok(())
     }
 
     pub async fn handle_matrix_room_topic(&self, event: &MatrixEvent) -> Result<()> {
-        if self
-            .matrix_client
-            .config()
-            .bridge
-            .disable_room_topic_notifications
-        {
+        if self.matrix_client.is_namespaced_user(&event.sender) {
             return Ok(());
         }
 
@@ -840,28 +837,25 @@ impl BridgeCore {
             .and_then(|c| c.get("topic").and_then(|t| t.as_str()))
             .unwrap_or("");
 
-        let sender_displayname = self
-            .matrix_client
-            .get_user_profile(&event.sender)
+        match self
+            .slack_client
+            .set_conversation_topic(&mapping.slack_channel_id, new_topic)
             .await
-            .ok()
-            .flatten()
-            .map(|(name, _)| name)
-            .unwrap_or_else(|| event.sender.clone());
+        {
+            Ok(()) => {
+                info!(
+                    "set slack channel {} topic (from matrix room {})",
+                    mapping.slack_channel_id, event.room_id
+                );
+            }
+            Err(err) => {
+                warn!(
+                    "failed to set slack channel {} topic: {}",
+                    mapping.slack_channel_id, err
+                );
+            }
+        }
 
-        let message = format!(
-            "**{}** changed the room topic to: {}",
-            sender_displayname, new_topic
-        );
-
-        self.slack_client
-            .send_message(&mapping.slack_channel_id, &message)
-            .await?;
-
-        debug!(
-            "forwarded room topic change to slack channel={}",
-            mapping.slack_channel_id
-        );
         Ok(())
     }
 
@@ -928,6 +922,215 @@ impl BridgeCore {
         );
 
         Ok(())
+    }
+
+    pub async fn handle_matrix_redaction(&self, event: &MatrixEvent) -> Result<()> {
+        if self.matrix_client.is_namespaced_user(&event.sender) {
+            return Ok(());
+        }
+
+        if self.matrix_client.config().bridge.disable_deletion_forwarding {
+            return Ok(());
+        }
+
+        let room_mapping = self.get_room_mapping_cached(&event.room_id).await?;
+        let Some(mapping) = room_mapping else {
+            return Ok(());
+        };
+
+        // The redacted event ID is in the content or as a special field
+        // For m.room.redaction, the redacts field contains the target event ID
+        let redacted_event_id = event.content.as_ref()
+            .and_then(|c| c.get("redacts").and_then(Value::as_str))
+            .or_else(|| event.state_key.as_deref());
+
+        let Some(redacted_event_id) = redacted_event_id else {
+            debug!("matrix redaction missing target event_id room_id={}", event.room_id);
+            return Ok(());
+        };
+
+        let Some(message_mapping) = self
+            .db_manager
+            .message_store()
+            .get_by_matrix_event_id(redacted_event_id)
+            .await?
+        else {
+            debug!("no message mapping for redacted event {}", redacted_event_id);
+            return Ok(());
+        };
+
+        match self.slack_client.delete_message(
+            &mapping.slack_channel_id,
+            &message_mapping.slack_message_id,
+        ).await {
+            Ok(()) => {
+                self.db_manager
+                    .message_store()
+                    .delete_by_matrix_event_id(redacted_event_id)
+                    .await?;
+                debug!(
+                    "forwarded matrix redaction to slack channel={} ts={}",
+                    mapping.slack_channel_id, message_mapping.slack_message_id
+                );
+            }
+            Err(err) => {
+                warn!(
+                    "failed to delete slack message for matrix redaction: {}",
+                    err
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_matrix_reaction(&self, event: &MatrixEvent) -> Result<()> {
+        if self.matrix_client.is_namespaced_user(&event.sender) {
+            return Ok(());
+        }
+
+        let room_mapping = self.get_room_mapping_cached(&event.room_id).await?;
+        let Some(mapping) = room_mapping else {
+            return Ok(());
+        };
+
+        let content = event.content.as_ref();
+        let relates_to = content
+            .and_then(|c| c.get("m.relates_to"))
+            .and_then(Value::as_object);
+
+        let Some(relates_to) = relates_to else {
+            return Ok(());
+        };
+
+        let Some(target_event_id) = relates_to.get("event_id").and_then(Value::as_str) else {
+            return Ok(());
+        };
+
+        let Some(emoji_key) = relates_to.get("key").and_then(Value::as_str) else {
+            return Ok(());
+        };
+
+        let Some(message_mapping) = self
+            .db_manager
+            .message_store()
+            .get_by_matrix_event_id(target_event_id)
+            .await?
+        else {
+            debug!("no message mapping for reaction target {}", target_event_id);
+            return Ok(());
+        };
+
+        // Convert Matrix emoji to Slack format (strip colons if present, handle unicode)
+        let slack_emoji = emoji_key
+            .trim_start_matches(':')
+            .trim_end_matches(':')
+            .to_string();
+
+        match self.slack_client.add_reaction(
+            &mapping.slack_channel_id,
+            &message_mapping.slack_message_id,
+            &slack_emoji,
+        ).await {
+            Ok(()) => {
+                debug!(
+                    "forwarded matrix reaction to slack channel={} ts={} emoji={}",
+                    mapping.slack_channel_id, message_mapping.slack_message_id, slack_emoji
+                );
+            }
+            Err(err) => {
+                warn!("failed to add slack reaction for matrix reaction: {}", err);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_matrix_typing(&self, event: &MatrixEvent) -> Result<()> {
+        if self.matrix_client.config().bridge.disable_typing_notifications {
+            return Ok(());
+        }
+
+        let room_mapping = self.get_room_mapping_cached(&event.room_id).await?;
+        let Some(mapping) = room_mapping else {
+            return Ok(());
+        };
+
+        // Matrix typing events contain a list of currently typing users
+        let typing_users = event.content.as_ref()
+            .and_then(|c| c.get("user_ids").and_then(Value::as_array))
+            .cloned()
+            .unwrap_or_default();
+
+        // Only forward typing for non-ghost users
+        for user in &typing_users {
+            if let Some(user_id) = user.as_str() {
+                if !self.matrix_client.is_namespaced_user(user_id) {
+                    // Slack doesn't have a direct typing API for bots
+                    debug!(
+                        "matrix typing detected room={} user={} slack_channel={}",
+                        event.room_id, user_id, mapping.slack_channel_id
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_matrix_receipt(&self, event: &MatrixEvent) -> Result<()> {
+        if self.matrix_client.config().bridge.disable_read_receipts {
+            return Ok(());
+        }
+
+        let room_mapping = self.get_room_mapping_cached(&event.room_id).await?;
+        let Some(mapping) = room_mapping else {
+            return Ok(());
+        };
+
+        // Extract the latest read event from the receipt
+        let content = event.content.as_ref();
+        if let Some(content) = content.and_then(Value::as_object) {
+            for (event_id, receipts) in content {
+                if let Some(read) = receipts.get("m.read").and_then(Value::as_object) {
+                    for (user_id, _receipt_data) in read {
+                        if self.matrix_client.is_namespaced_user(user_id) {
+                            continue;
+                        }
+
+                        // Find the corresponding Slack message timestamp
+                        if let Ok(Some(message_mapping)) = self
+                            .db_manager
+                            .message_store()
+                            .get_by_matrix_event_id(event_id)
+                            .await
+                        {
+                            match self.slack_client.mark_conversation(
+                                &mapping.slack_channel_id,
+                                &message_mapping.slack_message_id,
+                            ).await {
+                                Ok(()) => {
+                                    debug!(
+                                        "forwarded matrix read receipt to slack channel={} ts={}",
+                                        mapping.slack_channel_id, message_mapping.slack_message_id
+                                    );
+                                }
+                                Err(err) => {
+                                    warn!("failed to mark slack conversation: {}", err);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_matrix_sticker(&self, event: &MatrixEvent) -> Result<()> {
+        // Stickers are handled as image messages
+        self.handle_matrix_message(event).await
     }
 
     pub async fn request_bridge_matrix_room(
@@ -1050,6 +1253,24 @@ impl BridgeCore {
             .client
             .send_state_event(matrix_room_id, "m.room.name", "", &event_content)
             .await;
+
+        // Trigger backfill if enabled
+        let backfill_config = &self.matrix_client.config().backfill;
+        if backfill_config.enabled && backfill_config.max_messages > 0 {
+            let bridge = self.clone();
+            let mapping_for_backfill = mapping.clone();
+            let max_msgs = backfill_config.max_messages;
+            tokio::spawn(async move {
+                match bridge.backfill_channel(&mapping_for_backfill, max_msgs).await {
+                    Ok(count) => {
+                        info!("backfill completed: {} messages for channel {}", count, mapping_for_backfill.slack_channel_id);
+                    }
+                    Err(err) => {
+                        warn!("backfill failed for channel {}: {}", mapping_for_backfill.slack_channel_id, err);
+                    }
+                }
+            });
+        }
 
         Ok("I have bridged this room to your channel".to_string())
     }
@@ -1251,6 +1472,7 @@ impl BridgeCore {
                 &outbound.attachments,
                 outbound.reply_to.as_deref(),
                 outbound.edit_of.as_deref(),
+                outbound.formatted_body.as_deref(),
             )
             .await?;
         debug!(
@@ -1287,6 +1509,7 @@ impl BridgeCore {
                                     &body,
                                     &[],
                                     outbound.reply_to.as_deref(),
+                                    None,
                                     None,
                                 )
                                 .await?,
@@ -1336,6 +1559,7 @@ impl BridgeCore {
                                             &[],
                                             outbound.reply_to.as_deref(),
                                             None,
+                                            None,
                                         )
                                         .await?,
                                 );
@@ -1358,6 +1582,7 @@ impl BridgeCore {
                                 &[],
                                 outbound.reply_to.as_deref(),
                                 None,
+                                None,
                             )
                             .await?,
                     );
@@ -1375,6 +1600,7 @@ impl BridgeCore {
                         &[],
                         outbound.reply_to.as_deref(),
                         outbound.edit_of.as_deref(),
+                        outbound.formatted_body.as_deref(),
                     )
                     .await?,
             );
@@ -1454,14 +1680,61 @@ impl BridgeCore {
                 .await?;
         }
 
+        // If the message has blocks, render them for the formatted body
+        let (body_from_blocks, formatted_body) = if let Some(ref blocks) = ctx.blocks {
+            if let Some(blocks_arr) = blocks.as_array() {
+                let html = crate::parsers::blocks::render_blocks(blocks_arr);
+                let plain = crate::parsers::blocks::render_blocks_plain(blocks_arr);
+                (plain, html)
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
+        // Also render attachment objects if present
+        let attachment_html = ctx.slack_attachments.as_ref()
+            .and_then(|a| crate::parsers::blocks::render_attachments(a));
+
+        // Combine block HTML and attachment HTML
+        let final_formatted = match (formatted_body, attachment_html) {
+            (Some(blocks_html), Some(attachments_html)) => Some(format!("{}\n{}", blocks_html, attachments_html)),
+            (Some(blocks_html), None) => Some(blocks_html),
+            (None, Some(attachments_html)) => Some(attachments_html),
+            (None, None) => None,
+        };
+
+        // Use block-rendered plain text if available, otherwise fall back to the original content
+        let content_for_body = body_from_blocks.unwrap_or_else(|| ctx.content.clone());
+
+        // If the message has a thread_ts that differs from its own ts (source_message_id),
+        // treat it as a reply to the thread root message
+        let reply_to = if ctx.reply_to.is_some() {
+            ctx.reply_to
+        } else if let Some(ref thread_ts) = ctx.thread_ts {
+            if ctx.source_message_id.as_deref() != Some(thread_ts.as_str()) {
+                Some(thread_ts.clone())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let mut outbound = self.message_flow.slack_to_matrix(&SlackInboundMessage {
             channel_id: ctx.channel_id,
             sender_id: ctx.sender_id.clone(),
-            content: ctx.content,
+            content: content_for_body,
             attachments: ctx.attachments,
-            reply_to: ctx.reply_to,
+            reply_to,
             edit_of: ctx.edit_of,
         });
+
+        // Apply the rendered HTML formatted body from blocks/attachments
+        if final_formatted.is_some() {
+            outbound.formatted_body = final_formatted;
+        }
 
         let reply_mapping = if let Some(reply_slack_message_id) = outbound.reply_to.clone() {
             self.db_manager
@@ -2057,6 +2330,10 @@ impl BridgeCore {
             reply_to: None,
             edit_of: None,
             permissions: HashSet::new(),
+            thread_ts: None,
+            blocks: None,
+            slack_attachments: None,
+            files: None,
         })
         .await
     }
@@ -2068,8 +2345,9 @@ impl BridgeCore {
     pub async fn handle_slack_channel_update(
         &self,
         slack_channel_id: &str,
-        new_name: &str,
+        new_name: Option<&str>,
         new_topic: Option<&str>,
+        new_purpose: Option<&str>,
     ) -> Result<()> {
         let room_mapping = self
             .db_manager
@@ -2085,36 +2363,38 @@ impl BridgeCore {
             return Ok(());
         };
 
-        let name_pattern = &self.matrix_client.config().channel.name_pattern;
-        let formatted_name = crate::utils::formatting::apply_pattern_string(
-            name_pattern,
-            &[
-                ("guild", &mapping.slack_team_id),
-                ("name", &format!("#{}", new_name)),
-            ],
-        );
-
-        let current_name = self
-            .matrix_client
-            .get_room_name(&mapping.matrix_room_id)
-            .await?;
-        if current_name.as_deref() != Some(&formatted_name) {
-            self.matrix_client
-                .set_room_name(&mapping.matrix_room_id, &formatted_name)
-                .await?;
-
-            let mut updated = mapping.clone();
-            updated.slack_channel_name = new_name.to_string();
-            updated.updated_at = chrono::Utc::now();
-            self.db_manager
-                .room_store()
-                .update_room_mapping(&updated)
-                .await?;
-
-            info!(
-                "updated room name for channel {} to {}",
-                slack_channel_id, formatted_name
+        if let Some(new_name) = new_name {
+            let name_pattern = &self.matrix_client.config().channel.name_pattern;
+            let formatted_name = crate::utils::formatting::apply_pattern_string(
+                name_pattern,
+                &[
+                    ("guild", &mapping.slack_team_id),
+                    ("name", &format!("#{}", new_name)),
+                ],
             );
+
+            let current_name = self
+                .matrix_client
+                .get_room_name(&mapping.matrix_room_id)
+                .await?;
+            if current_name.as_deref() != Some(&formatted_name) {
+                self.matrix_client
+                    .set_room_name(&mapping.matrix_room_id, &formatted_name)
+                    .await?;
+
+                let mut updated = mapping.clone();
+                updated.slack_channel_name = new_name.to_string();
+                updated.updated_at = chrono::Utc::now();
+                self.db_manager
+                    .room_store()
+                    .update_room_mapping(&updated)
+                    .await?;
+
+                info!(
+                    "updated room name for channel {} to {}",
+                    slack_channel_id, formatted_name
+                );
+            }
         }
 
         if let Some(topic) = new_topic {
@@ -2130,7 +2410,94 @@ impl BridgeCore {
             }
         }
 
+        if let Some(purpose) = new_purpose {
+            // Purpose is typically displayed alongside topic in Matrix
+            // We can set it as part of the room topic if no topic is being set
+            if new_topic.is_none() {
+                let current_topic = self
+                    .matrix_client
+                    .get_room_topic(&mapping.matrix_room_id)
+                    .await?;
+                if current_topic.as_deref() != Some(purpose) {
+                    self.matrix_client
+                        .set_room_topic(&mapping.matrix_room_id, purpose)
+                        .await?;
+                    info!("updated room purpose (as topic) for channel {}", slack_channel_id);
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    pub async fn handle_slack_channel_archive(&self, slack_channel_id: &str) -> Result<()> {
+        let room_mapping = self
+            .db_manager
+            .room_store()
+            .get_room_by_slack_channel(slack_channel_id)
+            .await?;
+
+        let Some(mapping) = room_mapping else {
+            debug!(
+                "ignoring channel archive for unmapped channel {}",
+                slack_channel_id
+            );
+            return Ok(());
+        };
+
+        info!("channel {} archived on Slack, notifying Matrix room", slack_channel_id);
+
+        self.matrix_client
+            .send_notice(
+                &mapping.matrix_room_id,
+                "This Slack channel has been archived. No new messages will be bridged.",
+            )
+            .await?;
+
+        // Update the room name to indicate archived status
+        let delete_options = &self.matrix_client.config().channel.delete_options;
+        if let Some(prefix) = &delete_options.name_prefix {
+            let client = &self.matrix_client.appservice.client;
+            if let Ok(state) = client
+                .get_room_state_event(&mapping.matrix_room_id, "m.room.name", "")
+                .await
+            {
+                if let Some(name) = state.get("name").and_then(|n| n.as_str()) {
+                    let new_name = format!("{}{}", prefix, name);
+                    let event_content = json!({ "name": new_name });
+                    let _ = client
+                        .send_state_event(&mapping.matrix_room_id, "m.room.name", "", &event_content)
+                        .await;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn handle_slack_emoji_changed(&self, event: &serde_json::Value) -> Result<()> {
+        let subtype = event
+            .get("subtype")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let name = event
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let value = event
+            .get("value")
+            .and_then(serde_json::Value::as_str);
+
+        debug!("emoji_changed event subtype={} name={} value={:?}", subtype, name, value);
+
+        if name.is_empty() && subtype != "remove" {
+            debug!("emoji_changed event has no name, ignoring");
+            return Ok(());
+        }
+
+        self.emoji_handler
+            .handle_emoji_change(subtype, name, value)
+            .await
     }
 
     pub async fn handle_slack_channel_delete(&self, slack_channel_id: &str) -> Result<()> {

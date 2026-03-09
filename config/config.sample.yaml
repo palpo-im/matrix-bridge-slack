@@ -23,6 +23,16 @@ bridge:
   admin_mxid: "@admin:localhost"
   invalid_token_message: "Your Slack bot token seems to be invalid, and the bridge cannot function. Please update it in your bridge settings and restart the bridge"
   user_limit: null
+  # Whether to bridge custom emoji reactions from Slack to Matrix
+  custom_emoji_reactions: false
+  # Whether to use workspace avatar as the room avatar
+  workspace_avatar_in_rooms: false
+  # Number of participants to sync when joining a channel (0 to disable)
+  participant_sync_count: 5
+  # Only sync participants when a room is first created (not on rejoin)
+  participant_sync_only_on_create: true
+  # Whether to mute newly bridged channels by default for Matrix users
+  mute_channels_by_default: false
   user_activity:
     min_user_active_days: 0
     inactive_after_days: 0
@@ -84,3 +94,12 @@ metrics:
   enabled: false
   port: 9001
   bind_address: "127.0.0.1"
+
+# Backfill settings for importing historical messages from Slack
+backfill:
+  # Whether to enable message backfill when bridging a channel
+  enabled: false
+  # Maximum number of messages to backfill per channel
+  max_messages: 100
+  # Number of conversations to backfill on startup (0 to disable)
+  conversation_count: 0

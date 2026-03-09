@@ -91,6 +91,7 @@ impl OutboundSlackMessage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OutboundMatrixMessage {
     pub body: String,
+    pub formatted_body: Option<String>,
     pub reply_to: Option<String>,
     pub edit_of: Option<String>,
     pub attachments: Vec<String>,
@@ -251,6 +252,7 @@ impl MessageFlow {
     pub fn slack_to_matrix(&self, message: &SlackInboundMessage) -> OutboundMatrixMessage {
         OutboundMatrixMessage {
             body: self.slack_converter.format_for_matrix(&message.content),
+            formatted_body: None,
             reply_to: message.reply_to.clone(),
             edit_of: message.edit_of.clone(),
             attachments: message.attachments.clone(),
@@ -358,6 +360,11 @@ mod tests {
                 admin_mxid: None,
                 invalid_token_message: "Your Slack bot token seems to be invalid".to_string(),
                 user_activity: None,
+                custom_emoji_reactions: false,
+                workspace_avatar_in_rooms: false,
+                participant_sync_count: 5,
+                participant_sync_only_on_create: true,
+                mute_channels_by_default: false,
             },
             registration: RegistrationConfig {
                 bridge_id: "test-bridge".to_string(),
@@ -413,6 +420,7 @@ mod tests {
                 avatar_url_template: None,
             },
             metrics: MetricsConfig::default(),
+            backfill: Default::default(),
         })
     }
 

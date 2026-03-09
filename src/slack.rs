@@ -489,6 +489,116 @@ impl SlackClient {
         }))
     }
 
+    /// Delete a message from a channel using chat.delete API
+    pub async fn delete_message(&self, channel_id: &str, message_ts: &str) -> Result<()> {
+        let bot_token = self.bot_token()?;
+        let payload = json!({
+            "channel": channel_id,
+            "ts": message_ts
+        });
+        self.slack_api_post("chat.delete", &bot_token, payload).await?;
+        Ok(())
+    }
+
+    /// Mark a conversation as read up to a given timestamp
+    pub async fn mark_conversation(&self, channel_id: &str, ts: &str) -> Result<()> {
+        let bot_token = self.bot_token()?;
+        let payload = json!({
+            "channel": channel_id,
+            "ts": ts
+        });
+        self.slack_api_post("conversations.mark", &bot_token, payload).await?;
+        Ok(())
+    }
+
+    /// Rename a Slack channel
+    pub async fn rename_conversation(&self, channel_id: &str, new_name: &str) -> Result<()> {
+        let bot_token = self.bot_token()?;
+        let payload = json!({
+            "channel": channel_id,
+            "name": new_name
+        });
+        self.slack_api_post("conversations.rename", &bot_token, payload).await?;
+        Ok(())
+    }
+
+    /// Set the topic of a Slack channel
+    pub async fn set_conversation_topic(&self, channel_id: &str, topic: &str) -> Result<()> {
+        let bot_token = self.bot_token()?;
+        let payload = json!({
+            "channel": channel_id,
+            "topic": topic
+        });
+        self.slack_api_post("conversations.setTopic", &bot_token, payload).await?;
+        Ok(())
+    }
+
+    /// Set the purpose of a Slack channel
+    pub async fn set_conversation_purpose(&self, channel_id: &str, purpose: &str) -> Result<()> {
+        let bot_token = self.bot_token()?;
+        let payload = json!({
+            "channel": channel_id,
+            "purpose": purpose
+        });
+        self.slack_api_post("conversations.setPurpose", &bot_token, payload).await?;
+        Ok(())
+    }
+
+    /// Get replies in a thread
+    pub async fn get_conversation_replies(&self, channel_id: &str, thread_ts: &str, limit: Option<u32>, cursor: Option<&str>) -> Result<Value> {
+        let bot_token = self.bot_token()?;
+        let mut payload = json!({
+            "channel": channel_id,
+            "ts": thread_ts
+        });
+        if let Some(l) = limit {
+            payload["limit"] = json!(l);
+        }
+        if let Some(c) = cursor {
+            payload["cursor"] = json!(c);
+        }
+        let result = self.slack_api_post("conversations.replies", &bot_token, payload).await?;
+        Ok(result)
+    }
+
+    /// Get list of custom emojis for the team
+    pub async fn get_emoji_list(&self) -> Result<Value> {
+        let bot_token = self.bot_token()?;
+        let result = self.slack_api_post("emoji.list", &bot_token, json!({})).await?;
+        Ok(result)
+    }
+
+    /// Set the typing indicator in a channel
+    pub async fn set_typing(&self, channel_id: &str) -> Result<()> {
+        let bot_token = self.bot_token()?;
+        let payload = json!({
+            "channel": channel_id
+        });
+        // Note: Slack doesn't have a direct typing API for bots, but we can use this as a placeholder
+        // In Socket Mode, typing is indicated via RTM events
+        let _ = bot_token;
+        let _ = payload;
+        debug!("typing indicator not directly supported via Slack Web API for bots");
+        Ok(())
+    }
+
+    /// Get team/workspace info
+    pub async fn get_team_info(&self) -> Result<Option<Value>> {
+        let bot_token = self.bot_token()?;
+        match self.slack_api_post("team.info", &bot_token, json!({})).await {
+            Ok(value) => Ok(value.get("team").cloned()),
+            Err(err) => {
+                warn!("failed to fetch team info: {}", err);
+                Ok(None)
+            }
+        }
+    }
+
+    /// Get the team ID
+    pub async fn get_team_id(&self) -> Option<String> {
+        self.team_id.read().await.clone()
+    }
+
     async fn socket_mode_loop(self) {
         let app_token = match self.app_token() {
             Ok(token) => token,
@@ -578,8 +688,104 @@ impl SlackClient {
             "reaction_removed" => self.handle_reaction_removed_event(event).await?,
             "member_joined_channel" => self.handle_member_joined_channel_event(event).await?,
             "member_left_channel" => self.handle_member_left_channel_event(event).await?,
-            "channel_marked" => self.handle_channel_marked_event(event).await?,
+            "channel_marked" | "im_marked" | "group_marked" => {
+                self.handle_channel_marked_event(event).await?
+            }
+            "channel_rename" => self.handle_channel_rename_event(event).await?,
+            "channel_archive" => self.handle_channel_archive_event(event).await?,
+            "emoji_changed" => self.handle_emoji_changed_event(event).await?,
+            "channel_created" => {
+                let ch_id = event
+                    .pointer("/channel/id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                debug!("channel_created event received for {}, ignoring", ch_id);
+            }
+            "channel_joined" => {
+                // channel_joined is like member_joined_channel but for the bot itself
+                let channel_id = event
+                    .pointer("/channel/id")
+                    .or_else(|| event.get("channel"))
+                    .and_then(Value::as_str);
+                if let Some(channel_id) = channel_id {
+                    if let Some(bot_user_id) = self.bot_user_id.read().await.clone() {
+                        if let Some(bridge) = self.bridge.read().await.clone()
+                            && let Err(err) = bridge
+                                .handle_slack_member_joined_channel(channel_id, &bot_user_id)
+                                .await
+                        {
+                            error!("failed to forward slack channel_joined event: {}", err);
+                        }
+                    }
+                }
+            }
+            "channel_left" => {
+                // channel_left is like member_left_channel but for the bot itself
+                let channel_id = event.get("channel").and_then(Value::as_str);
+                if let Some(channel_id) = channel_id {
+                    if let Some(bot_user_id) = self.bot_user_id.read().await.clone() {
+                        if let Some(bridge) = self.bridge.read().await.clone()
+                            && let Err(err) = bridge
+                                .handle_slack_member_left_channel(channel_id, &bot_user_id)
+                                .await
+                        {
+                            error!("failed to forward slack channel_left event: {}", err);
+                        }
+                    }
+                }
+            }
             _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_channel_rename_event(&self, event: &Value) -> Result<()> {
+        let channel_id = event
+            .pointer("/channel/id")
+            .and_then(Value::as_str)
+            .or_else(|| event.get("channel").and_then(Value::as_str));
+        let new_name = event
+            .pointer("/channel/name")
+            .and_then(Value::as_str);
+        let Some(channel_id) = channel_id else {
+            return Ok(());
+        };
+        let Some(new_name) = new_name else {
+            return Ok(());
+        };
+
+        info!("channel_rename event: channel={} new_name={}", channel_id, new_name);
+        if let Some(bridge) = self.bridge.read().await.clone()
+            && let Err(err) = bridge
+                .handle_slack_channel_update(channel_id, Some(new_name), None, None)
+                .await
+        {
+            error!("failed to forward slack channel_rename event: {}", err);
+        }
+        Ok(())
+    }
+
+    async fn handle_channel_archive_event(&self, event: &Value) -> Result<()> {
+        let Some(channel_id) = event.get("channel").and_then(Value::as_str) else {
+            return Ok(());
+        };
+
+        info!("channel_archive event: channel={}", channel_id);
+        if let Some(bridge) = self.bridge.read().await.clone()
+            && let Err(err) = bridge.handle_slack_channel_archive(channel_id).await
+        {
+            error!("failed to forward slack channel_archive event: {}", err);
+        }
+        Ok(())
+    }
+
+    async fn handle_emoji_changed_event(&self, event: &Value) -> Result<()> {
+        let subtype = event.get("subtype").and_then(Value::as_str).unwrap_or("");
+        debug!("emoji_changed event: subtype={}", subtype);
+        if let Some(bridge) = self.bridge.read().await.clone()
+            && let Err(err) = bridge.handle_slack_emoji_changed(event).await
+        {
+            error!("failed to forward slack emoji_changed event: {}", err);
         }
         Ok(())
     }
@@ -787,7 +993,65 @@ impl SlackClient {
                 }
                 return Ok(());
             }
-            Some("bot_message") => return Ok(()),
+            Some("channel_topic") | Some("group_topic") => {
+                let Some(channel_id) = event.get("channel").and_then(Value::as_str) else {
+                    return Ok(());
+                };
+                let topic = event.get("topic").and_then(Value::as_str);
+                if let Some(bridge) = self.bridge.read().await.clone()
+                    && let Err(err) = bridge
+                        .handle_slack_channel_update(channel_id, None, topic, None)
+                        .await
+                {
+                    error!("failed to forward slack channel topic update: {}", err);
+                }
+                return Ok(());
+            }
+            Some("channel_purpose") | Some("group_purpose") => {
+                let Some(channel_id) = event.get("channel").and_then(Value::as_str) else {
+                    return Ok(());
+                };
+                let purpose = event.get("purpose").and_then(Value::as_str);
+                if let Some(bridge) = self.bridge.read().await.clone()
+                    && let Err(err) = bridge
+                        .handle_slack_channel_update(channel_id, None, None, purpose)
+                        .await
+                {
+                    error!("failed to forward slack channel purpose update: {}", err);
+                }
+                return Ok(());
+            }
+            Some("channel_name") | Some("group_name") => {
+                let Some(channel_id) = event.get("channel").and_then(Value::as_str) else {
+                    return Ok(());
+                };
+                let name = event.get("name").and_then(Value::as_str);
+                if let Some(bridge) = self.bridge.read().await.clone()
+                    && let Err(err) = bridge
+                        .handle_slack_channel_update(channel_id, name, None, None)
+                        .await
+                {
+                    error!("failed to forward slack channel name update: {}", err);
+                }
+                return Ok(());
+            }
+            Some("me_message") => {
+                // Treat /me messages as regular messages (emote)
+            }
+            Some("thread_broadcast") => {
+                // Treat thread broadcast as regular message
+            }
+            Some("bot_message") => {
+                // Forward bot messages that have text content
+                let has_text = event
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|t| !t.trim().is_empty());
+                if !has_text {
+                    return Ok(());
+                }
+                // Fall through to forward_message below
+            }
             Some(_) => return Ok(()),
             None => {}
         }
@@ -805,7 +1069,8 @@ impl SlackClient {
             return Ok(());
         }
 
-        let Some(sender_id) = sender_id else {
+        // Use user id if available, fall back to bot_id for bot_message subtypes
+        let Some(sender_id) = sender_id.or(bot_id) else {
             return Ok(());
         };
         let Some(message_ts) = message.get("ts").and_then(Value::as_str) else {
@@ -824,6 +1089,15 @@ impl SlackClient {
         );
         let attachments = extract_slack_attachments(message);
         let permissions = self.resolve_permissions(sender_id).await;
+
+        // Extract Block Kit blocks, attachment objects, and file objects from the message JSON
+        let blocks = message.get("blocks").cloned();
+        let slack_attachments = message.get("attachments")
+            .and_then(Value::as_array)
+            .cloned();
+        let files_json = message.get("files")
+            .and_then(Value::as_array)
+            .cloned();
 
         let Some(bridge) = self.bridge.read().await.clone() else {
             debug!("slack message received before bridge binding");
@@ -844,6 +1118,10 @@ impl SlackClient {
                     None
                 },
                 permissions,
+                thread_ts: thread_ts.map(ToOwned::to_owned),
+                blocks,
+                slack_attachments,
+                files: files_json,
             })
             .await
         {
@@ -1140,12 +1418,16 @@ fn extract_slack_attachments(message: &Value) -> Vec<String> {
 
     if let Some(files) = message.get("files").and_then(Value::as_array) {
         for file in files {
+            // Skip deleted files (mode=tombstone)
+            if file.get("mode").and_then(Value::as_str) == Some("tombstone") {
+                continue;
+            }
             let link = file
-                .get("permalink_public")
+                .get("url_private_download")
                 .and_then(Value::as_str)
-                .or_else(|| file.get("permalink").and_then(Value::as_str))
-                .or_else(|| file.get("url_private_download").and_then(Value::as_str))
-                .or_else(|| file.get("url_private").and_then(Value::as_str));
+                .or_else(|| file.get("url_private").and_then(Value::as_str))
+                .or_else(|| file.get("permalink_public").and_then(Value::as_str))
+                .or_else(|| file.get("permalink").and_then(Value::as_str));
             if let Some(link) = link
                 && seen.insert(link.to_string())
             {
