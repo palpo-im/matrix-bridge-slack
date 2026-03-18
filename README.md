@@ -33,6 +33,48 @@ Contact: `chris@acroidea.com`
 
 ## Quick Start (Local)
 
+### Palpo KDL Configuration
+
+When running with Palpo, you can configure the bridge registration in your `palpo.kdl`:
+
+```kdl
+// Palpo server config — enable appservice bridge loading
+server_name "example.com"
+appservice_registration_dir "appservices"
+```
+
+And create the bridge config file as `config.kdl`:
+
+```kdl
+// Matrix-Slack Bridge Configuration (KDL format)
+// See config/config.example.kdl for all options
+
+bridge {
+    domain "example.com"
+    homeserver_url "http://127.0.0.1:6006"
+    port 9005
+    bind_address "0.0.0.0"
+    bridge_id "slack"
+    appservice_token "put_your_as_token_here"
+    homeserver_token "put_your_hs_token_here"
+    admin_mxid "@admin:example.com"
+}
+
+auth {
+    client_id "YOUR_SLACK_CLIENT_ID"
+    bot_token "YOUR_SLACK_BOT_TOKEN"
+    app_token "YOUR_SLACK_APP_TOKEN"
+}
+
+database {
+    url "sqlite://./slack.db"
+    max_connections 10
+    min_connections 1
+}
+```
+
+### YAML Configuration
+
 1. Create your config file:
 
 ```bash
@@ -118,12 +160,21 @@ This bridge implementation follows Slack official docs:
 
 ## Configure Matrix / Palpo (Step by Step)
 
-1. In Palpo config (`palpo.toml`), set server name and appservice registration directory:
+1. In Palpo config, set your server name and appservice registration directory.
 
-```toml
-server_name = "example.com"
-appservice_registration_dir = "appservices"
-```
+   Using KDL (`palpo.kdl`):
+
+   ```kdl
+   server_name "example.com"
+   appservice_registration_dir "appservices"
+   ```
+
+   Or using TOML (`palpo.toml`):
+
+   ```toml
+   server_name = "example.com"
+   appservice_registration_dir = "appservices"
+   ```
 
 2. Place your bridge registration file there, for example:
    - `appservices/slack-registration.yaml`

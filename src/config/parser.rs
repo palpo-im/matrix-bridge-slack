@@ -395,16 +395,28 @@ pub struct MetricsConfig {
 
 impl Config {
     pub fn load() -> Result<Self, ConfigError> {
-        let config_path = std::env::var("CONFIG_PATH")
-            .ok()
-            .or_else(|| Some("config.yaml".to_string()))
-            .unwrap();
-
+        let config_path = std::env::var("CONFIG_PATH").ok().unwrap_or_else(|| {
+            if std::path::Path::new("config.kdl").exists() {
+                "config.kdl".to_string()
+            } else {
+                "config.yaml".to_string()
+            }
+        });
         Self::load_from_file(&config_path)
     }
 
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(&path)?;
+
+        if super::kdl_support::is_kdl_file(path.as_ref()) {
+            let mut config: Config = super::kdl_support::parse_kdl_config(&content)
+                .map_err(ConfigError::Kdl)?;
+            config.apply_env_overrides();
+            config.normalize();
+            config.validate()?;
+            return Ok(config);
+        }
+
         let mut config: Config = serde_yaml::from_str(&content)?;
         config.apply_env_overrides();
         config.normalize();

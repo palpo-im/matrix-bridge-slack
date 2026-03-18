@@ -28,11 +28,7 @@ slack-registration.yaml
 target/
 **/*.rs.bk
 
-# Python helper tooling
 .venv/
-__pycache__/
-.pytest_cache/
 .claude/
 nul
-_diff.md
-_todos.md
+_*.md
